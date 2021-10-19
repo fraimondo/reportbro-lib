@@ -40,8 +40,7 @@ class ImageRenderElement(DocElementBase):
                     VerticalAlignment.bottom: 'B'}.get(self.vertical_alignment)
                 try:
                     image_info = pdf_doc.image(
-                        self.image_key, x, y, self.width, self.height, type=image.image_type,
-                        image_fp=image.image_fp, halign=halign, valign=valign)
+                        image.image_fp, x, y, self.width, self.height, type=image.image_type)
                 except Exception as ex:
                     raise ReportBroError(
                         Error('errorMsgLoadingImageFailed', object_id=self.id,

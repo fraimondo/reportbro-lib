@@ -49,7 +49,7 @@ setup(
     install_requires=[
         'Babel>=2.0',
         'enum34',
-        'reportbro-fpdf>=1.7.10',
+        'fpdf2>=2.4.5',
         'Pillow>=4.0',
         'simpleeval>=0.9.10',
         'qrcode>=6.1',
