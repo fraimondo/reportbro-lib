@@ -18,9 +18,13 @@ import base64
 import fpdf
 import importlib.resources
 import re
+import xlsxwriter
+from io import BytesIO, BufferedReader
 import os
 import xlsxwriter
 from io import BufferedReader, IOBase
+
+from pathlib import Path
 
 from .containers import ReportBand
 from .elements import *
@@ -59,15 +63,14 @@ class DocumentPDFRenderer:
 
     def render(self):
         watermark_width = watermark_height = 0
-        watermark_filename = None
-        if self.add_watermark:
-            with importlib.resources.path('reportbro.data', 'logo_watermark.png') as p:
-                watermark_filename = p
-                if watermark_filename.exists():
-                    watermark_width = self.document_properties.page_width / 3
-                    watermark_height = watermark_width * (115 / 460)
-                else:
-                    self.add_watermark = False
+        if self.add_watermark is not False:
+            if not isinstance(self.add_watermark, Path):
+                self.add_watermark = Path(self.add_watermark)  # type: ignore
+            if not self.add_watermark.exists():
+                self.add_watermark = False
+            else:
+                watermark_width = self.document_properties.page_width
+                watermark_height = self.document_properties.page_height
 
         self.content_band.prepare(self.context, self.pdf_doc)
         page_count = 1
@@ -93,14 +96,6 @@ class DocumentPDFRenderer:
         # render at least one page to show header/footer even if content is empty
         while not self.content_band.is_finished() or self.context.get_page_number() == 0:
             self.add_page()
-            if self.add_watermark:
-                if watermark_height < self.document_properties.page_height:
-                    self.pdf_doc.image(
-                        watermark_filename,
-                        self.document_properties.page_width / 2 - watermark_width / 2,
-                        self.document_properties.page_height - watermark_height,
-                        watermark_width, watermark_height)
-
             content_offset_y = self.document_properties.margin_top
             page_number = self.context.get_page_number()
             if self.document_properties.header_display == BandDisplay.always or\
@@ -119,9 +114,15 @@ class DocumentPDFRenderer:
                     0, self.document_properties.footer_size, self.context, self.pdf_doc)
                 self.footer_band.render_pdf(self.document_properties.margin_left, footer_offset_y, self.pdf_doc)
                 self.footer_band.reset()
-
+            
             self.content_band.render_pdf(
                 self.document_properties.margin_left, content_offset_y, self.pdf_doc, cleanup=True)
+            if self.add_watermark is not False:
+                self.pdf_doc.image(
+                    self.add_watermark.as_posix(),
+                    self.document_properties.page_width / 2 - watermark_width / 2,
+                    self.document_properties.page_height - watermark_height,
+                    watermark_width, watermark_height)
 
         self.header_band.cleanup()
         self.footer_band.cleanup()
@@ -385,8 +386,8 @@ class FPDFRB(fpdf.FPDF):
         fpdf.FPDF.__init__(self, orientation=orientation, unit='pt', format=dimension)
         self.x = 0
         self.y = 0
-        self.core_fonts_encoding = core_fonts_encoding
-        self.encode_error_handling = encode_error_handling
+        self.set_doc_option('core_fonts_encoding', core_fonts_encoding)
+        # self.set_doc_option('encode_error_handling', encode_error_handling)
         self.loaded_images = dict()
         self.available_fonts = dict(
             courier=dict(standard_font=True),
@@ -472,6 +473,120 @@ class FPDFRB(fpdf.FPDF):
             return True
         else:
             return False
+    
+    def split_text(self, first_w, w, txt, align_justify=False):
+        """
+        Optimized version of `multi_cell` with `split_only=True` to split a text into lines.
+        :param first_w: width of first line
+        :param w: line width except first one (set with first_w)
+        :param txt: text to split
+        :param align_justify: if True the text will be justified
+        :return: Array of tuples with (str, int, bool) where each tuple represents a text line, text width
+        and a flag if there is a forced new line at the end.
+        """
+        txt = self.normalize_text(txt)
+        ret = []
+        cw = self.current_font['cw']
+        w_max = (w - 2*self.c_margin) * 1000.0 / self.font_size
+        if first_w != w:
+            current_w_max = (first_w - 2*self.c_margin) * 1000.0 / self.font_size
+            append_to_line = True  # first text line will be appended to existing line
+        else:
+            current_w_max = w_max
+            append_to_line = False
+        size_factor = self.font_size / 1000.0
+        s = txt.replace("\r", '')
+        nb = len(s)
+        sep = -1
+        i = 0
+        j = 0
+        l = 0
+        l_after_sep = 0
+        ns = 0 # number of spaces
+        nl = 1
+        while i < nb:
+            # Get next character
+            c = s[i]
+            if c == '\n':
+                # Explicit line break
+                if self.ws > 0:
+                    self.ws = 0
+                ret.append((fpdf.util.substr(s, j, i-j), l * size_factor, True))
+                i += 1
+                sep = -1
+                j = i
+                l = 0
+                l_after_sep = 0
+                ns = 0
+                nl += 1
+                if first_w != w:
+                    current_w_max = w_max
+                    append_to_line = False
+                continue
+            if c == ' ':
+                sep = i
+                l_after_sep = 0
+                ls = l
+                ns += 1
+
+            if self.unifontsubset:
+                char = ord(c)
+                if len(cw) > char:
+                    char_w = cw[char]
+                elif self.current_font['desc']['MissingWidth']:
+                    char_w = self.current_font['desc']['MissingWidth']
+                else:
+                    char_w = 500
+            else:
+                if ord(c) < 128:
+                    char_w = cw.get(c,0)
+                else:
+                    char_w = 0
+                    encoded_chars = c.encode(self.core_fonts_encoding)
+                    for byte_val in encoded_chars:
+                        char_w += cw.get(chr(byte_val), 0)
+            l_after_char = l + char_w
+            if l_after_char > current_w_max:
+                # Automatic line break
+                if sep == -1:
+                    if append_to_line:
+                        # appending text (without any whitespaces so far) to existing line
+                        # does not fit -> try again with new line
+                        ret.append(('', 0, False))
+                        i = 0
+                    else:
+                        if i == j:
+                            i += 1
+                        if self.ws > 0:
+                            self.ws=0
+                        # text is too long but there was no separator -> add all chars which fit into line
+                        ret.append((fpdf.util.substr(s, j, i-j), l * size_factor, False))
+                else:
+                    if align_justify:
+                        if ns > 1:
+                            self.ws = (current_w_max - ls) * size_factor / (ns-1)
+                        else:
+                            self.ws = 0
+                    # add text until last separator
+                    ret.append((fpdf.util.substr(s, j, sep-j), (l - l_after_sep) * size_factor, False))
+                    i = sep + 1
+                sep = -1
+                j = i
+                l = 0
+                l_after_sep = 0
+                ns = 0
+                nl += 1
+                if first_w != w:
+                    current_w_max = w_max
+                    append_to_line = False
+            else:
+                l = l_after_char
+                l_after_sep += char_w
+                i += 1
+        # Last chunk
+        if i > j:
+            ret.append((fpdf.util.substr(s, j, i-j), l * size_factor, False))
+        return ret
 
 
 class Report:
