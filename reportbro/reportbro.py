@@ -114,7 +114,7 @@ class DocumentPDFRenderer:
                     0, self.document_properties.footer_size, self.context, self.pdf_doc)
                 self.footer_band.render_pdf(self.document_properties.margin_left, footer_offset_y, self.pdf_doc)
                 self.footer_band.reset()
-            
+
             self.content_band.render_pdf(
                 self.document_properties.margin_left, content_offset_y, self.pdf_doc, cleanup=True)
             if self.add_watermark is not False:
@@ -436,6 +436,7 @@ class FPDFRB(fpdf.FPDF):
     def get_image(self, image_key):
         return self.loaded_images.get(image_key)
 
+
     def set_font(self, family, style='', size=0, underline=False):
         """Set font in underlying pdf renderer.
 
@@ -484,6 +485,7 @@ class FPDFRB(fpdf.FPDF):
         :return: Array of tuples with (str, int, bool) where each tuple represents a text line, text width
         and a flag if there is a forced new line at the end.
         """
+        word_spacing = 0
         txt = self.normalize_text(txt)
         ret = []
         cw = self.current_font['cw']
@@ -509,9 +511,9 @@ class FPDFRB(fpdf.FPDF):
             c = s[i]
             if c == '\n':
                 # Explicit line break
-                if self.ws > 0:
-                    self.ws = 0
-                ret.append((fpdf.util.substr(s, j, i-j), l * size_factor, True))
+                if word_spacing > 0:
+                    word_spacing = 0
+                ret.append((text_substr(s, j, i-j), l * size_factor, True))
                 i += 1
                 sep = -1
                 j = i
@@ -529,7 +531,7 @@ class FPDFRB(fpdf.FPDF):
                 ls = l
                 ns += 1
 
-            if self.unifontsubset:
+            if self.is_ttf_font:
                 char = ord(c)
                 if len(cw) > char:
                     char_w = cw[char]
@@ -557,18 +559,18 @@ class FPDFRB(fpdf.FPDF):
                     else:
                         if i == j:
                             i += 1
-                        if self.ws > 0:
-                            self.ws=0
+                        if word_spacing > 0:
+                            word_spacing=0
                         # text is too long but there was no separator -> add all chars which fit into line
-                        ret.append((fpdf.util.substr(s, j, i-j), l * size_factor, False))
+                        ret.append((text_substr(s, j, i-j), l * size_factor, False))
                 else:
                     if align_justify:
                         if ns > 1:
-                            self.ws = (current_w_max - ls) * size_factor / (ns-1)
+                            word_spacing = (current_w_max - ls) * size_factor / (ns-1)
                         else:
-                            self.ws = 0
+                            word_spacing = 0
                     # add text until last separator
-                    ret.append((fpdf.util.substr(s, j, sep-j), (l - l_after_sep) * size_factor, False))
+                    ret.append((text_substr(s, j, sep-j), (l - l_after_sep) * size_factor, False))
                     i = sep + 1
                 sep = -1
                 j = i
@@ -585,7 +587,7 @@ class FPDFRB(fpdf.FPDF):
                 i += 1
         # Last chunk
         if i > j:
-            ret.append((fpdf.util.substr(s, j, i-j), l * size_factor, False))
+            ret.append((text_substr(s, j, i-j), l * size_factor, False))
         return ret
 
 
@@ -1006,3 +1008,9 @@ class Report:
                 dest_data[parameter.name] = value
             else:
                 data[parameter.name] = value
+
+
+def text_substr(s, start, length=-1):
+    if length < 0:
+        length = len(s) - start
+    return s[start : start + length]
