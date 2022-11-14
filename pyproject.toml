@@ -35,7 +35,7 @@ dependencies = [
     "fpdf2==2.5.7",
     "reportbro-simpleeval>=0.9.11",
     "Pillow==9.3.0",
-    "qrcode==7.3.1",
+    "qrcode>=7.3.1, <=8.0.0",
     "XlsxWriter==3.0.3"
 ]
 
