@@ -1185,7 +1185,8 @@ class TableBandElement(object):
         Must be called after the row was processed.
         """
         if self.rendering_complete and self.group_changed:
-            self.group_changed_row_indices.pop(0)
+            if len(self.group_changed_row_indices) > 0:
+                self.group_changed_row_indices.pop(0)
 
     def prepare(self, ctx, row_index=None):
         if self.group_expression:
